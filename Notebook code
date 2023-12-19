@@ -1,0 +1,592 @@
+---
+title: "Hornef paper PCA"
+author: "LR"
+date: "20231219"
+
+---
+Load necessary libraries:
+
+
+```{r}
+library(Biobase)
+library(limma)
+library(mogene10sttranscriptcluster.db)
+library(RColorBrewer)
+library(gProfileR)
+library(genefilter)
+library(openxlsx)
+library(piano)
+library(gplots)
+library(sva)
+library(msigdbr)
+library(GEOquery)
+library(ggplot2)
+library(tidyverse)
+library(EnhancedVolcano)
+library(GOplot)
+library(tidyr)
+library(dplyr)
+library(stringi)
+library(gprofiler2)
+
+
+```
+
+
+Visible inspection of data with getGEO led to the conclusion that data were normalized, therefore, raw data files were downloaded and used for analysis (stored in the same working directory).
+
+set1:
+GSE35596 	Age-dependent gene expression in isolated small intestinal epithelial cells (IECs)
+
+Sample one seemed to be an outlier (green (3 days) and red (21 days)) and was therefore excluded from analysis at whole:
+"GSM871387_M2246-M2249_rH100L5gH100L5_251486814424_S01_GE2-v5_95_Feb07_1_1.txt.gz"
+set2:
+GSE35597 	Microbiota-dependent gene expression in small intestinal epithelial cells (IECs
+
+```{r}
+files1<-c("GSM871388_M2246-M2249_rH100L5gH100L5_251486814424_S01_GE2-v5_95_Feb07_1_2.txt.gz",
+         "GSM871389_M2246-M2249_rH100L5gH100L5_251486814424_S01_GE2-v5_95_Feb07_1_3.txt.gz",
+         "GSM871390_M2246-M2249_rH100L5gH100L5_251486814424_S01_GE2-v5_95_Feb07_1_4.txt.gz")
+files2<-c("GSM871391_M3001-M3004_rH100L5gH100L5_251486822531_S01_GE2-v5_95_Feb07_1_1.txt.gz",
+        "GSM871392_M3001-M3004_rH100L5gH100L5_251486822531_S01_GE2-v5_95_Feb07_1_2.txt.gz",
+        "GSM871393_M3001-M3004_rH100L5gH100L5_251486822531_S01_GE2-v5_95_Feb07_1_3.txt.gz",
+         "GSM871394_M3001-M3004_rH100L5gH100L5_251486822531_S01_GE2-v5_95_Feb07_1_4.txt.gz")
+```
+
+eset1: 3 vs 21 days
+eset2: spf vs gfp days
+
+```{r}
+file.exists("C:/Users/laura/OneDrive/Dokumente/Laura_Masterthesis/GSE35596_RAW") #check for file recognition
+file.exists("C:/Users/laura/OneDrive/Dokumente/Laura_Masterthesis/GSE35597_RAW")
+eset1 <- read.maimages(files1,path="GSE35596_RAW",source="agilent",green.only=FALSE) #read raw data
+eset2 <- read.maimages(files2,path="GSE35597_RAW",source="agilent",green.only=FALSE)
+```
+
+```{r}
+RG1 <- backgroundCorrect(eset1, method="normexp", offset = 16)
+RG2 <- backgroundCorrect(eset2, method="normexp", offset = 16)
+```
+Merge background corrected RGs:
+```{r}
+rownames(RG1)<- eset1$genes$GeneName #assign gene names/genes accordingly
+rownames(RG2)<- eset2$genes$GeneName
+
+RG <- cbind(RG1, RG2) #bind/merge data sets
+
+boxplot(RG$G~col(RG$G), las=2, main = "Merged datasets 1 and 2 begore normalization") #check data
+#ggsave("FINAL Boxplot_2 merged before normalization.tiff", width=7, height=5)
+```
+
+Performing platform appropitate normalization steps:
+
+```{r}
+MA1 <- normalizeWithinArrays(RG, method="loess")
+MA <- normalizeBetweenArrays(MA1,method="scale") #should be performed for two colour arrays!?
+MA2 <- MA[MA$genes$ControlType==0,]
+MA2.avg <- avereps(MA2, ID=MA2$genes$GeneName)
+
+boxplot(MA$M~col(MA$M), las=2, main = "Merged datasets 1 and two begore normalization") #check data after normalization
+#ggsave("FINAL Boxplot_2 merged after normalization.tiff", width=7, height=5)
+```
+
+
+
+
+
+```{r}
+logexp <- exprs.MA(MA2) # Getting the Log expression Matrix for data set 1
+rownames(logexp)<- MA2$genes$GeneName #Give the gene names
+logexp <- logexp[,-c(8,9,12,13)] #exclude GF samples since these are of no interst for durther analysis
+
+
+```
+
+File annotations for both data sets:
+```{r}
+files<-c(
+         "Sample2_G",
+         "Sample2_R",
+         "Sample3_G",
+         "Sample3_R",
+         "Sample4_G",
+         "Sample4_R",
+         "Sample5_G",
+         "Sample6_R",
+         "Sample7_G",
+         "Sample8_R")
+
+colnames(logexp) <- files
+```
+
+
+```{r}
+length(logexp)
+
+
+head(logexp)
+```
+Add Metadata for the two sample sets to make a matrix dividing the different channels (red and green):
+
+```{r}
+metadata <- data.frame(sample = colnames(logexp),
+                       dye = rep(c("G","R"), 5),
+                       batch= c("1","1","1","1","1","1","2","2","2","2"),
+                       time = c("21","3","3","21","21","3","28","28","28","28"),
+                       condition=c( "SPF","neonate SPF","neonate SPF", "SPF", "SPF","neonate SPF", "SPF", "SPF","SPF","SPF"))
+
+metadata
+
+```
+
+
+Add third datset (raw data also downloaded):
+Neonate sal infection
+Design: single channel micro array
+
+```{r}
+files_sal <- c("GSM1239862_M4074.txt.gz",
+           "GSM1239863_M4075.txt.gz",
+           "GSM1239864_M4076.txt.gz",
+           "GSM1239865_M4078.txt.gz",
+           "GSM1239866_M4079.txt.gz",
+           "GSM1239867_M4080.txt.gz",
+           "GSM1239868_M4082.txt.gz",
+           "GSM1239869_M4083.txt.gz",
+           "GSM1239870_M4084.txt.gz",
+           "GSM1239871_M4086.txt.gz",
+           "GSM1239872_M4087.txt.gz",
+           "GSM1239873_M4161.txt.gz")
+```
+
+```{r}
+file.exists("C:/Users/laura/OneDrive/Dokumente/Laura_Masterthesis/GSE51160_RAW")
+eset_sal<- read.maimages(files_sal,path="GSE51160_RAW",source="agilent",green.only=TRUE)
+```
+```{r}
+RG_sal <- backgroundCorrect(eset_sal, method="normexp", offset = 12)
+rownames(RG_sal)<- eset_sal$genes$GeneName
+head(RG_sal)
+
+boxplot(RG_sal$E~col(RG_sal$E), cex.main=1.25, cex.lab=0.5, cex.axis=1, las=2, main = "Backgroundcorrected RG_sal")
+```
+
+
+One channel, therefore only normalization between arrays, not within, necessary:
+
+```{r}
+MA_sal <- normalizeBetweenArrays(RG_sal, method="quantile")
+MA2_sal <- MA_sal[MA_sal$genes$ControlType==0,]
+
+boxplot(MA_sal$E~col(MA_sal$E), las=2, main = "Normalized RG_sal") #checking data
+```
+#MA2.avg_sal <- avereps(MA2_sal, ID=MA2_sal$genes$GeneName)
+
+
+Add sample names for Salmonella Dataset (#3):
+```{r}
+files_sal<-c("Sample9_G",#here starts the 3rd dataet
+         "Sample10_G",
+         "Sample11_G",
+         "Sample12_G",
+         "Sample13_G",
+         "Sample14_G",
+         "Sample15_G",
+         "Sample16_G",
+         "Sample17_G",
+         "Sample18_G",
+         "Sample19_G",
+         "Sample20_G")
+```
+
+```{r}
+logexp_sal <- (MA2_sal$E) # Getting the Log expression Matrix for data set 3
+rownames(logexp_sal)<- MA2_sal$genes$GeneName #Give the gene names
+colnames(logexp_sal) <- files_sal
+```
+
+
+
+Merge log expression sets of all three datasets (previously merged 1&2 (logexp) + 3 (logexp_sal)) --> logexp3
+
+```{r}
+
+length(logexp)
+length(logexp_sal)
+
+logexp3 <- merge(logexp, logexp_sal, by="row.names")
+
+rownames(logexp3) <-logexp3$"Row.names"
+#colnames(logexp3) <- files
+logexp3$"Row.names" <- NULL
+#logexp3 <- as.matrix(logexp3)
+
+logexp3 <-na.omit(logexp3) #since there are nans in second data sets, rows of genes not expressed in both
+#datasets are omited
+
+head(logexp3)
+length(logexp3)
+#logexp3
+```
+Add Metadata of sal dataset to oreviously described metadata:
+GSM1239862 	co_rep1
+GSM1239863 	wt_rep1
+GSM1239864 	SPI1_rep1
+GSM1239865 	co_rep2
+GSM1239866 	wt_rep2
+GSM1239867 	SPI1_rep2
+GSM1239868 	co_rep3
+GSM1239869 	wt_rep3
+GSM1239870 	SPI1_rep3
+GSM1239871 	co_rep4
+GSM1239872 	wt_rep4
+GSM1239873 	SPI1_rep4
+mice are 5 days old, only green dye was used
+```{r}
+metadata <- data.frame(sample = colnames(logexp3),
+                       dye=c("G","R","G","R","G","R","G","R","G","R","G","G","G","G","G","G","G","G","G","G","G","G"),
+                       batch=c("1","1","1","1","1","1","2","2","2","2","3","3","3","3","3","3","3","3","3","3","3","3"),
+                       time=c("21","3","3","21","21","3","28","28","28","28","5","5","5","5","5","5","5","5","5","5","5","5"),
+                       condition=c( "SPF","neonate SPF","neonate SPF", "SPF", "SPF","neonate SPF", "SPF", "SPF","SPF","SPF","neonate SPF", "neonate Sal", "neonate Spi1","neonate SPF", "neonate Sal", "neonate Spi1","neonate SPF", "neonate Sal", "neonate Spi1","neonate SPF", "neonate Sal", "neonate Spi1" ))
+
+
+
+
+
+metadata
+```
+
+
+
+
+
+```{r}
+#PCA Comat results:
+lexpc3 <- prcomp(t(logexp3)) #later on proceeded with this one for further analysis
+
+summary(lexpc3)
+
+  
+```
+
+Safe data in an excel file
+```{r}
+# Output in an excel file
+#wb <- createWorkbook()
+# Create each sheet
+#addWorksheet(wb, "Metadata_3 merged datasets")
+#writeData(wb, "Metadata_3 merged datasets", metadata, rowNames = TRUE)
+#writeData(wb, "all_de_genes", all_de_genes, rowNames = TRUE)
+#saveWorkbook(wb, "Metadata_DE_3merged_datasets.xlsx", overwrite = TRUE)
+```
+
+
+```{r}
+#Variance explained merged data sets:
+
+var_explained <- lexpc3$sdev^2/sum(lexpc3$sdev^2)
+
+qplot(c(1:22), var_explained) + 
+  geom_line() + 
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +  #change distance 1,2, etc...!!!!!!!
+  ggtitle("Scree Plot_Combined Data Sets") +
+  theme_minimal()+
+  ylim(0, 1)
+print (var_explained)
+
+#ggsave("3merge_var_explained before batch correction.tiff", width=7, height=5)
+
+
+boxplot(logexp3,names=colnames(logexp3), las=2, cex.main=1.25, cex.lab=1.5, cex.axis=0.75, main = "Before batch correction")
+
+#ggsave("3_mergeBoxplot_3 merged before batch correction.tiff", width=7, height=5)
+
+```
+It seems like only PC1 is important but normalization/batch correction step is necessary.
+
+Plotting PCA results before batch correction:
+
+```{r, width=7, height=7}
+#Plot PCA results looking at age (time)
+
+tibble(PC1=lexpc3$x[,1],PC2=lexpc3$x[,2],time=metadata$time)%>%
+    ggplot(aes(x=PC1,y=PC2, color=factor(time),label=time))+
+            geom_point(size=5)+
+            geom_label()+theme_minimal()
+#ggsave("age_pca_spf_3_datasets before batch correction.tiff", width=5, height=5)
+
+#Plot PCA results looking at batch
+
+tibble(PC1=lexpc3$x[,1],PC2=lexpc3$x[,2],time=metadata$batch)%>%
+    ggplot(aes(x=PC1,y=PC2, color=factor(time),label=time))+
+            geom_point(size=5)+
+            geom_label()+theme_minimal() + theme_minimal()+labs (x="PC1 (89,17%)", y="PC2 (5,12%)")
+
+ggsave("factorbatch_hornef_paper_pca_before batch correction.tiff", width=5, height=5)
+
+tibble(PC1=lexpc3$x[,1],PC2=lexpc3$x[,2],time=metadata$condition)%>%
+    ggplot(aes(x=PC1, y=PC2, color=factor(time),label=time))+
+            geom_point(size=3)+
+            theme_minimal()+labs (x="PC1 (89,17%)", y="PC2 (5,12%)")+theme(legend.title =element_blank())
+
+
+
+ggsave("condition_hornef_paper_pca_before batch correction.tiff", width=5, height=5)
+
+```
+A clear batch effect is visible
+
+Batch Correction:
+
+```{r}
+logexp_batch3 <- ComBat(logexp3, metadata$batch)
+
+
+
+boxplot(logexp_batch3,names=colnames(logexp_batch3), las=2, cex.main=1.25, cex.lab=1.5, cex.axis=0.75, main = "After batch correction")
+
+#ggsave("3merge_Boxplot_ AFTER batch correction.tiff", width=7, height=5)
+```
+
+```{r}
+#PCA Comat results:
+lexpc_batch3 <- prcomp(t(logexp_batch3)) #later on proceeded with this one for further analysis
+#lexpc_limma <- prcomp(t(logexp_batch3)) # tested which method is better or produces more reliable data
+summary(lexpc_batch3)
+
+var_explained3 <- lexpc_batch3$sdev^2/sum(lexpc_batch3$sdev^2)
+
+qplot(c(1:22), var_explained3) + 
+  geom_line() + 
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +  #change distance 1,2, etc...!!!!!!!
+  ggtitle("Scree Plot_Combined Data Sets") +
+  theme_minimal()+
+  ylim(0, 1)
+
+#ggsave("3merge_var_explained AFTER batch correction.tiff", width=5, height=5)
+
+print (var_explained3)
+
+  
+```
+
+
+Plot PCA results, looking at batch, after batch correction:
+```{r}
+tibble(PC1=lexpc3$x[,1],PC2=lexpc3$x[,2],time=metadata$batch)%>%
+    ggplot(aes(x=PC1,y=PC2, color=factor(time),label=time))+
+            geom_point(size=5)+
+            geom_label()+theme_minimal() + theme_minimal()+labs (x="PC1 (89,17%)", y="PC2 (5,12%)")
+
+ggsave("batch_batch_PCA Before batch correction.tiff", width=7, height=5)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+#Plot PCA results looking at age (time)
+
+tibble(PC1=lexpc_batch3$x[,1],PC2=lexpc_batch3$x[,2],time=metadata$time)%>%
+    ggplot(aes(x=PC1,y=PC2, color=factor(time),label=time))+
+            geom_point(size=5)+
+            geom_label()+theme_minimal()
+
+#ggsave("3merge_age_PCA AFTER batch correction.tiff", width=5, height=5)
+
+#Plot PCA results looking at batch
+
+tibble(PC1=lexpc_batch3$x[,1],PC2=lexpc_batch3$x[,2],time=metadata$batch)%>%
+    ggplot(aes(x=PC1,y=PC2, color=factor(time),label=time))+
+            geom_point(size=5)+
+            geom_label()+theme_minimal()
+
+
+
+#ggsave("3merge_batch_PCA AFTER batch correction.tiff", width=5, height=5)
+
+```
+
+```{r}
+library(RColorBrewer)
+```
+
+`
+Plotting PCA in differnt colours:
+
+```{r}
+cbp1 <- c("#999999", "#E69F00", "#56B4E9", "#009E73",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+#p + scale_color_manual(values = cbp1)
+
+#Plotting resukts, with spheres and color blind palette:
+tibble(PC1=lexpc_batch3$x[,1],PC2=lexpc_batch3$x[,2],time=metadata$condition)%>%
+    ggplot(aes(x=PC1, y=PC2, color=factor(time),label=time))+
+            geom_point(size=3)+
+            theme_minimal()+ stat_ellipse()+ scale_colour_manual(values=cbp1)+labs (x="PC1 (46,63%)", y="PC2 (13,48%)")+theme(legend.title =element_blank())
+#ggsave("hornef_cbp1_3merge_Condition_PCA AFTER batch correction.tiff", width=10, height=7)
+
+tibble(PC1=lexpc_batch3$x[,1],PC2=lexpc_batch3$x[,2],time=metadata$condition)%>%
+    ggplot(aes(x=PC1, y=PC2, color=factor(time),label=time))+
+            geom_point(size=3)+
+            theme_minimal()+ stat_ellipse()+labs (x="PC1 (46,63%)", y="PC2 (13,48%)")+theme(legend.title =element_blank())
+ggsave("hornef_ellipse_3merge_Condition_PCA AFTER batch correction.tiff", width=10, height=7)
+
+tibble(PC1=lexpc_batch3$x[,1],PC2=lexpc_batch3$x[,2],time=metadata$condition)%>%
+    ggplot(aes(x=PC1, y=PC2, color=factor(time),label=time))+
+            geom_point(size=3)+
+            theme_minimal()+labs (x="PC1 (46,63%)", y="PC2 (13,48%)")+theme(legend.title =element_blank())
+ggsave("hornef_new_Condition_PCA AFTER batch correction.tiff", width=10, height=7)
+
+tibble(PC1=lexpc_batch3$x[,1],PC2=lexpc_batch3$x[,2],time=metadata$batch)%>%
+    ggplot(aes(x=PC1,y=PC2, color=factor(time),label=time))+
+            geom_point(size=5)+
+            geom_label()+theme_minimal()+labs (x="PC1 (46,63%)", y="PC2 (13,48%)")+theme(legend.title =element_blank())
+#ggsave("batch_ellipse_3merge_Condition_PCA AFTER batch correction.tiff", width=7, height=5)
+
+
+```
+
+
+Add design for Venn diagramm:
+
+Factors:
+1 : adult SPF
+2 : neonate SPF
+3 : neonate Salmonella WT
+4 : neonate Salmonella dtSpi1
+
+```{r}
+design<- model.matrix(~ 0 + factor(c(1,2,2,1,1,2,1,1,1,1,2,3,4,2,3,4,2,3,4,2,3,4)))
+colnames(design) <-c("adult_SPF", "neonate_SPF", "neonate_Salmonella_WT", "neonate_Salmonella_dtSpi1")
+design #show design matrix
+```
+
+check for DE genes:
+
+Neonate Salmonella vs Neonate
+Neonate vs adult
+```{r}
+#Log transformation for data set using ComBat batch corrected data
+fit <- lmFit(logexp_batch3, design)
+fit2 <- eBayes(fit, 0.05) #used for de genes later on -- heatmap
+allgenes <- topTable(fit2,number=nrow(fit2))
+```
+
+```{r}
+all_de_genes <- topTable(fit2, adjust="fdr", p.value=0.05, number=Inf)
+all_de_genes <-na.omit(all_de_genes)
+
+sel <- match(rownames(all_de_genes), rownames(logexp_batch3)) # Get the index of DE genes in ex
+sel_ex <- logexp_batch3[sel,] # Select those rows only
+
+head(sel_ex)
+str(all_de_genes)
+```
+
+Factors:
+1 : adult SPF
+2 : neonate SPF
+3 : neonate Salmonella WT
+4 : neonate Salmonella dtSpi1
+
+"adult_SPF", "neonate_SPF", "neonate_Salmonella_WT", "neonate_Salmonella_dtSpi1"
+```{r}
+#"Neonate", "SPF", "GF", "Neonate_Salmonella", "Neonate_Salmonella_dSpi1"
+contrast.matrix <- makeContrasts(adult_SPF-neonate_SPF,neonate_Salmonella_WT-neonate_SPF,neonate_Salmonella_WT-adult_SPF,levels=design)
+
+#check how to do GO and then proceed to writing 
+fit <- lmFit(logexp_batch3, design)
+fitint <- contrasts.fit(fit, contrast.matrix)
+fitint <- eBayes(fitint, 0.05)
+
+de_genes_adult_vs_neo <- topTable(fitint,coef=1, adjust="fdr", p.value=0.05, number=Inf)
+
+de_genes_neoSal_vs_neo <- topTable(fitint,coef=2, adjust="fdr", p.value=0.05, number=Inf)
+
+
+all_de_genes <- topTable(fitint, adjust="fdr", p.value=0.05, number=Inf)
+
+
+
+```
+
+```{r}
+# Output in an excel file
+#wb1 <- createWorkbook()
+#wb2 <- createWorkbook()
+# Create each sheet
+#addWorksheet(wb1, "de_genes_adult_vs_neo")
+#writeData(wb1, "de_genes_adult_vs_neo", de_genes_adult_vs_neo, rowNames = TRUE)
+
+#addWorksheet(wb2, "de_genes_neoSal_vs_neo")
+#writeData(wb2, "de_genes_neoSal_vs_neo", de_genes_neoSal_vs_neo, rowNames = TRUE)
+
+#saveWorkbook(wb1, "de_genes_adult_vs_neo.xlsx", overwrite = TRUE)
+#saveWorkbook(wb2, "de_genes_neoSal_vs_neo.xlsx", overwrite = TRUE)
+
+```
+
+Creating a venn diagramm to see overlapping genes:
+```{r, venn diagramm}
+
+library(VennDiagram)
+library(readxl)
+
+
+
+# Make two data frames df_group1 and df_group2 with the top 50 genes
+# Read from excel files
+df_group1 <- readxl::read_excel("de_genes_adult_vs_neo.xlsx")
+df_group2 <- readxl::read_excel("de_genes_neoSal_vs_neo.xlsx")
+
+# Filter genes based on logFC and p-value
+filtered_genes_group1 <- df_group1[df_group1$P.Value <= 0.05, ]
+filtered_genes_group2 <- df_group2[df_group2$P.Value <= 0.05, ]
+
+# Sort genes by logFC
+top_genes_group1 <- head(filtered_genes_group1[order(-filtered_genes_group1$logFC), ]$Gene, 50)
+top_genes_group2 <- head(filtered_genes_group2[order(-filtered_genes_group2$logFC), ]$Gene, 50)
+
+
+# Definieren Sie die Farben
+light_blue <- "#87CEFA"  # Light Blue
+light_red <- "#FFA07A"   # Light Red
+overlap_color <- "#8A2BE2"  # Overlap Color (Purple)
+
+# Erstellen Sie ein Venn-Diagramm
+venn.plot <- venn.diagram(
+  x = list(Group1 = top_genes_group1, Group2 = top_genes_group2),
+  category.names = c("Group1", "Group2"),
+  filename = NULL,  # Setzen Sie einen Dateinamen, wenn Sie das Diagramm speichern möchten
+  fill = c(light_blue, light_red),  # Setzen Sie die Farben für die Gruppen
+  alpha = c(0.5, 0.5),  # Transparenz der Farben
+  category.cex = 1.5,  # Größe der Kategoriebezeichnungen
+  overlap = 0.5,  # Größe des Überlappungsbereichs
+  col = overlap_color,  # Farbe des Überlappungsbereichs
+  cex = 3  # Größe der Zahlen im Diagramm
+)
+
+
+# Setzen Sie einen Dateinamen für das TIFF
+venn_plot_tiff <- "venn_diagram_50.tiff"
+
+# Speichern Sie das Venn-Diagramm als TIFF mit hoher Auflösung
+tiff(venn_plot_tiff, width = 8, height = 8, units = "in", res = 300)
+grid.draw(venn.plot)
+dev.off()
+
+
+
+```
+
