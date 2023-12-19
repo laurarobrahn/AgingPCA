@@ -140,8 +140,8 @@ metadata
 ```
 
 
-Add third datset (raw data also downloaded):
-Neonate sal infection
+Add third dataset (raw data downloaded as well):
+Neonate Salmonella infection vs healthy neonates.
 Design: single channel micro array
 
 ```{r}
@@ -207,7 +207,7 @@ colnames(logexp_sal) <- files_sal
 
 
 
-Merge log expression sets of all three datasets (previously merged 1&2 (logexp) + 3 (logexp_sal)) --> logexp3
+Merge log expression data sets of all three datasets (previously merged 1&2 (logexp) + 3 (logexp_sal)) --> logexp3
 
 ```{r}
 
@@ -253,18 +253,14 @@ metadata <- data.frame(sample = colnames(logexp3),
 
 
 
-metadata
+metadata #show meta data
 ```
-
-
-
-
 
 ```{r}
 #PCA Comat results:
 lexpc3 <- prcomp(t(logexp3)) #later on proceeded with this one for further analysis
 
-summary(lexpc3)
+summary(lexpc3) #inspect data
 
   
 ```
@@ -335,7 +331,7 @@ tibble(PC1=lexpc3$x[,1],PC2=lexpc3$x[,2],time=metadata$condition)%>%
 ggsave("condition_hornef_paper_pca_before batch correction.tiff", width=5, height=5)
 
 ```
-A clear batch effect is visible
+A clear batch effect is visible..
 
 Batch Correction:
 
@@ -350,7 +346,7 @@ boxplot(logexp_batch3,names=colnames(logexp_batch3), las=2, cex.main=1.25, cex.l
 ```
 
 ```{r}
-#PCA Comat results:
+#PCA Combat results:
 lexpc_batch3 <- prcomp(t(logexp_batch3)) #later on proceeded with this one for further analysis
 #lexpc_limma <- prcomp(t(logexp_batch3)) # tested which method is better or produces more reliable data
 summary(lexpc_batch3)
@@ -422,7 +418,7 @@ library(RColorBrewer)
 ```
 
 `
-Plotting PCA in differnt colours:
+Plotting PCA in different colours:
 
 ```{r}
 cbp1 <- c("#999999", "#E69F00", "#56B4E9", "#009E73",
@@ -505,7 +501,7 @@ Factors:
 #"Neonate", "SPF", "GF", "Neonate_Salmonella", "Neonate_Salmonella_dSpi1"
 contrast.matrix <- makeContrasts(adult_SPF-neonate_SPF,neonate_Salmonella_WT-neonate_SPF,neonate_Salmonella_WT-adult_SPF,levels=design)
 
-#check how to do GO and then proceed to writing 
+#perform limma de gene analysis
 fit <- lmFit(logexp_batch3, design)
 fitint <- contrasts.fit(fit, contrast.matrix)
 fitint <- eBayes(fitint, 0.05)
@@ -537,7 +533,7 @@ all_de_genes <- topTable(fitint, adjust="fdr", p.value=0.05, number=Inf)
 
 ```
 
-Creating a venn diagramm to see overlapping genes:
+Creating a Venn diagramm to see overlapping genes:
 ```{r, venn diagramm}
 
 library(VennDiagram)
@@ -559,7 +555,7 @@ top_genes_group1 <- head(filtered_genes_group1[order(-filtered_genes_group1$logF
 top_genes_group2 <- head(filtered_genes_group2[order(-filtered_genes_group2$logFC), ]$Gene, 50)
 
 
-# Definieren Sie die Farben
+# Define colours
 light_blue <- "#87CEFA"  # Light Blue
 light_red <- "#FFA07A"   # Light Red
 overlap_color <- "#8A2BE2"  # Overlap Color (Purple)
@@ -578,10 +574,9 @@ venn.plot <- venn.diagram(
 )
 
 
-# Setzen Sie einen Dateinamen für das TIFF
+# Make TIFF from Venn plot
 venn_plot_tiff <- "venn_diagram_50.tiff"
 
-# Speichern Sie das Venn-Diagramm als TIFF mit hoher Auflösung
 tiff(venn_plot_tiff, width = 8, height = 8, units = "in", res = 300)
 grid.draw(venn.plot)
 dev.off()
